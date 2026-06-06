@@ -142,6 +142,16 @@ def attribution_to_pq(flat_idx: int, N: int) -> Tuple[int, int]:
     return divmod(flat_idx, N)
 
 
+def compute_reconstruction_error(
+    decomp_sum: torch.Tensor,
+    reference:  torch.Tensor,
+) -> float:
+    reference = reference.to(decomp_sum.dtype).to(decomp_sum.device)
+    diff_norm = torch.norm(decomp_sum - reference).item()
+    ref_norm  = torch.norm(reference).item()
+    return float("inf") if ref_norm < 1e-12 else diff_norm / ref_norm
+
+
 def compute_decomposition_error(
     decomp_results: Dict,
     grounding:      Dict,
@@ -158,11 +168,7 @@ def compute_decomposition_error(
     decomp_sum = comp_relu.sum(-1)
 
     cnn_ref = grounding["relu_outputs"][conv_index].float()
-    diff_norm = torch.norm(decomp_sum - cnn_ref).item()
-    ref_norm  = torch.norm(cnn_ref).item()
-    if ref_norm < 1e-12:
-        return float("inf")
-    return diff_norm / ref_norm
+    return compute_reconstruction_error(decomp_sum, cnn_ref)
 
 
 def save_outputs(
@@ -733,7 +739,16 @@ def decomposed_forward(
 
     x = image_tensor.to(DEVICE)
     x_comp = None
-    results = {"layer_components": {}, "per_layer_alpha": {}}
+    results = {"layer_components": {}, "per_layer_alpha": {}, "layer_errors": []}
+
+    def _record_error(layer_name: str, layer_type: str, components: torch.Tensor, reference: torch.Tensor) -> None:
+        error = compute_reconstruction_error(components.sum(-1), reference)
+        results["layer_errors"].append({
+            "layer": layer_name,
+            "type": layer_type,
+            "error": error,
+        })
+        print(f"  {layer_type} {layer_name}: reconstruction error = {error:.6f}")
 
     relu_idx = 0
     pool_idx = 0
@@ -773,13 +788,17 @@ def decomposed_forward(
                 results["layer_components"][lname] = x_comp.clone().cpu()
                 conv_idx += 1
                 x = layer(x)
+                _record_error(lname, "conv", x_comp, grounding["conv_outputs"][conv_idx - 1].to(DEVICE))
 
             elif isinstance(layer, nn.ReLU):
                 if x_comp is not None:
                     Z_orig = grounding["conv_outputs"][relu_idx].to(DEVICE)
                     x_comp = relu_decompose(x_comp, Z_orig)
+                relu_name = f"relu{relu_idx + 1}"
                 relu_idx += 1
                 x = layer(x)
+                if x_comp is not None:
+                    _record_error(relu_name, "relu", x_comp, grounding["relu_outputs"][relu_idx - 1].to(DEVICE))
 
             elif isinstance(layer, nn.MaxPool2d):
                 ks = layer.kernel_size if isinstance(layer.kernel_size, int) else layer.kernel_size[0]
@@ -807,6 +826,8 @@ def decomposed_forward(
 
                 pool_idx += 1
                 x = layer(x)
+                if x_comp is not None:
+                    _record_error(pname, "pool", x_comp, x)
 
             else:
                 x = layer(x)
