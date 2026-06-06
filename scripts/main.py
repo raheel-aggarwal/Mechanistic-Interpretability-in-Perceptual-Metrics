@@ -114,7 +114,7 @@ def parse_args(argv=None):
     pool.add_argument(
         "--pool-mode",
         choices=["softmax", "max_pixel"],
-        default="softmax",
+        default="max-pixel",
         help='MaxPool decomposition mode: "softmax" (default, softmax approximation) or "max_pixel" (direct max pixel pass-through).',
     )
 
