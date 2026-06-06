@@ -195,7 +195,7 @@ def maxpool_decompose_max_pixel(
     pc_win = pc_unf.view(B, C, K, ks * ks, L).permute(0, 1, 4, 3, 2)# (B, C, L, ks², K)
 
     # Gather max pixel components: expand argmax to K dim, gather
-    argmax_expanded = argmax_idx.expand(B, C, L, K).unsqueeze(-1)    # (B, C, L, K, 1)
+    argmax_expanded = (argmax_idx.unsqueeze(-1).expand(-1,-1,-1,1,K))    # (B, C, L, K, 1)
     z_out = torch.gather(pc_win, dim=-2, index=argmax_expanded).squeeze(-2)  # (B, C, L, K)
     return z_out.view(B, C, H_out, W_out, K)
 
