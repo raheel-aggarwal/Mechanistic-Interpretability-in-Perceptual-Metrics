@@ -153,7 +153,7 @@ p, q = divmod(top_flat, N)              # row-major flat index → (p, q)
 
 **`kernel_decomp.py`** — basis construction, kernel projection, and component-map generation.
 
-- `dct_basis(N)` and `haar_basis(N)` build the 1-D orthonormal basis matrix of shape `(N, N)` where each row is one basis vector. Both satisfy `U @ U.T == I_N`.
+- `dct_basis(N)` and `haar_basis(N)` build the 1-D orthonormal basis matrix of shape `(N, N)` where each row is one basis vector. `haar_basis` is recursively generated and then orthonormalized to guarantee exactness for arbitrary N. Both satisfy `U @ U.T == I_N`.
 - `build_2d_basis(N)` forms the 2-D basis by outer product: `Psi[p, q, x, y] = U[p, x] * U[q, y]`, used for reference; the separable structure means the full `(N, N, N, N)` tensor is never materialised in the hot path.
 - `project_kernel(K, U)` projects a `(Co, Ci, N, N)` kernel onto the 1-D basis via two sequential einsum contractions — first across rows, then across columns — returning projection coefficients of shape `(Co, Ci, N, N)`. Using two contractions avoids forming the explicit 2-D outer product and keeps intermediate sizes at `O(N·Co·Ci·N)`.
 - `reconstruct_from_coeffs(coeffs, U)` inverts the projection for round-trip verification. Maximum absolute error should be below `1e-5` for both Haar and DCT bases at all supported kernel sizes.

@@ -19,6 +19,12 @@ import torch
 import torch.nn.functional as F
 
 
+def _orthonormalize_rows(U: np.ndarray) -> np.ndarray:
+    """Return an orthonormal basis with rows spanning the same space as U."""
+    Q, _ = np.linalg.qr(U.T)
+    return Q.T
+
+
 def dct_basis(N: int) -> np.ndarray:
     """Orthonormal DCT-II basis for R^N."""
     ns = np.arange(N)
@@ -30,7 +36,12 @@ def dct_basis(N: int) -> np.ndarray:
 
 
 def haar_basis(N: int) -> np.ndarray:
-    """Generalised Haar basis for R^N."""
+    """Generalised Haar basis for R^N.
+
+    Returns an orthonormal matrix U of shape (N, N), where each row is a
+    basis vector. The basis is built recursively and then orthonormalized to
+    guarantee exact decomposition even for non-power-of-two lengths.
+    """
     vectors: List[np.ndarray] = []
     vectors.append(np.ones(N) / math.sqrt(N))
 
@@ -43,14 +54,15 @@ def haar_basis(N: int) -> np.ndarray:
 
         v = np.zeros(N)
         v[lo : lo + left_size] = 1.0
-        v[lo + left_size : hi+1] = -left_size / right_size
-        vectors.append(v / np.linalg.norm(v))
+        v[lo + left_size : hi + 1] = -left_size / right_size
+        vectors.append(v)
 
         _recurse(lo, lo + left_size - 1)
         _recurse(lo + left_size, hi)
 
     _recurse(0, N - 1)
-    return np.array(vectors)
+    U = np.stack(vectors, axis=0)
+    return _orthonormalize_rows(U)
 
 
 def get_1d_basis(N: int, basis_type: str = "haar") -> np.ndarray:
@@ -203,7 +215,9 @@ def prune_components(
 # ── Self-test ─────────────────────────────────────────────────────────────────
 
 def _run_tests() -> None:
-    # Round-trip test
+    import torch.nn.functional as F
+
+    # Round-trip kernel projection and reconstruction
     for btype in ("haar", "dct"):
         for N in (3, 5, 11):
             U    = haar_basis(N) if btype == "haar" else dct_basis(N)
@@ -212,6 +226,27 @@ def _run_tests() -> None:
             K_re = reconstruct_from_coeffs(c, U)
             err  = (K_t - K_re).abs().max().item()
             print(f"  {btype} N={N:2d}  round-trip error: {err:.2e}",
+                  "✓" if err < 1e-5 else "✗")
+
+    # Verify orthonormality of rows in each basis
+    for btype in ("haar", "dct"):
+        for N in (3, 5, 11):
+            U = haar_basis(N) if btype == "haar" else dct_basis(N)
+            eye_err = np.max(np.abs(U @ U.T - np.eye(N)))
+            print(f"  {btype} basis orthonormality N={N:2d} err: {eye_err:.2e}",
+                  "✓" if eye_err < 1e-8 else "✗")
+
+    # Exact basis-component convolution reconstruction
+    for btype in ("haar", "dct"):
+        for N in (3, 5):
+            U = haar_basis(N) if btype == "haar" else dct_basis(N)
+            K = torch.randn(2, 3, N, N)
+            X = torch.randn(1, 3, 10, 10)
+            z = basis_component_maps(X, K, U, padding=1, stride=1)
+            out = z.sum(-1)
+            ref = F.conv2d(X, K, padding=1)
+            err = (out - ref).abs().max().item()
+            print(f"  {btype} conv reconstruction N={N:2d} err: {err:.2e}",
                   "✓" if err < 1e-5 else "✗")
 
     # Prune test
