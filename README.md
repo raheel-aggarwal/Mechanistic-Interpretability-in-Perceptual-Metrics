@@ -2,6 +2,8 @@
 
 A Python toolkit for decomposing an AlexNet CNN into basis-aware component maps and visualising how convolutional kernels contribute to intermediate activations. The decomposition is algebraically exact through linear layers and ReLU, and uses a numerically stable softmax approximation at MaxPool — giving an additive, attributable representation of every activation in the network's feature extractor.
 
+Note: This project benefited from implementation assistance and code review suggestions generated using Anthropic's Claude and GitHub Copilot.
+
 ---
 
 ## Table of Contents
