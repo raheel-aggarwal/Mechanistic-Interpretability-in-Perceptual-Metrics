@@ -38,7 +38,7 @@ from kernel_decomp import (
     prune_components,
     reconstruct_from_coeffs,
 )
-from maxpool_decomp import estimate_alpha, maxpool_decompose
+from maxpool_decomp import estimate_alpha, maxpool_decompose, maxpool_decompose_max_pixel
 from relu_decomp import relu_decompose
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -726,6 +726,7 @@ def decomposed_forward(
     alpha_fallback:     float          = 50.0,
     path_epsilon:       float          = 1e-6,
     prune:              Optional[int]  = None,
+    pool_mode:          str            = "softmax",
 ) -> Dict:
     if alpha_per_pool is None:
         alpha_per_pool = {}
@@ -796,9 +797,13 @@ def decomposed_forward(
                 results["per_layer_alpha"][pname] = alpha_val
 
                 if x_comp is not None:
-                    x_comp = maxpool_decompose(
-                        x_comp, p_orig, ks, st,
-                        padding=pad_mp, alpha=alpha_val)
+                    if pool_mode == "max_pixel":
+                        x_comp = maxpool_decompose_max_pixel(
+                            x_comp, p_orig, ks, st, padding=pad_mp)
+                    else:  # default softmax mode
+                        x_comp = maxpool_decompose(
+                            x_comp, p_orig, ks, st,
+                            padding=pad_mp, alpha=alpha_val)
 
                 pool_idx += 1
                 x = layer(x)
@@ -807,6 +812,7 @@ def decomposed_forward(
                 x = layer(x)
 
     results["basis_type"] = basis_type
+    results["pool_mode"] = pool_mode
     results["prune"] = prune
     return results
 
@@ -826,6 +832,7 @@ def run_one(
     visualise:         bool,
     vis_image_path:    Optional[str],
     max_channels:      int,
+    pool_mode:         str,
     model,
 ) -> Dict:
     print(f"\n{'─'*60}")
@@ -841,7 +848,7 @@ def run_one(
     grounding = collect_grounding_values(x, model)
 
     prune_str = f", prune={prune}" if prune is not None else ""
-    print(f"Pass 2: decomposed forward (basis={basis_type}{prune_str})…")
+    print(f"Pass 2: decomposed forward (basis={basis_type}{prune_str}, pool={pool_mode})…")
     decomp_results = decomposed_forward(
         x,
         model,
@@ -853,6 +860,7 @@ def run_one(
         alpha_fallback=alpha_fallback,
         path_epsilon=path_epsilon,
         prune=prune,
+        pool_mode=pool_mode,
     )
     print("  α per pool layer:", decomp_results["per_layer_alpha"])
 
@@ -918,6 +926,7 @@ def run_images(
     visualise:         bool,
     vis_image_path:    Optional[str],
     max_channels:      int,
+    pool_mode:         str,
     create_subdirs:    bool = False,
 ) -> None:
     for image_path in image_paths:
@@ -937,5 +946,6 @@ def run_images(
             visualise=visualise,
             vis_image_path=vis_image_path,
             max_channels=max_channels,
+            pool_mode=pool_mode,
             model=model,
         )

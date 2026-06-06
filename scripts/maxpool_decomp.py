@@ -1,12 +1,15 @@
 """
 maxpool_decomp.py
 -----------------
-Softmax-approximated additive MaxPool decomposition with adaptive α.
+MaxPool decomposition with two modes:
+- 'softmax': softmax-approximated additive decomposition with adaptive α (default)
+- 'max_pixel': direct pass-through from the max pixel in each pooling window
 
 Public API
 ----------
-estimate_alpha(p_original, kernel_size, stride, ...)  -> float
-maxpool_decompose(p_components, p_original, kernel_size, stride, ...) -> Tensor
+estimate_alpha(p_original, kernel_size, stride, ...)          -> float
+maxpool_decompose(p_components, p_original, kernel_size, ...) -> Tensor (softmax mode)
+maxpool_decompose_max_pixel(p_components, p_original, ...)    -> Tensor (max pixel mode)
 """
 
 import numpy as np
@@ -140,6 +143,63 @@ def maxpool_decompose(
     return z_out.view(B, C, H_out, W_out, K)
 
 
+def maxpool_decompose_max_pixel(
+    p_components: torch.Tensor,
+    p_original:   torch.Tensor,
+    kernel_size:  int,
+    stride:       int,
+    padding:      int = 0,
+) -> torch.Tensor:
+    """
+    Pass through decomposition from the actual max pixel in each pooling window.
+
+    For each window, identify the pixel with maximum activation value in p_original,
+    and pass through only its decomposed components without any weighting. All other
+    pixels in the window are ignored.
+
+    Parameters
+    ----------
+    p_components : Tensor  (B, C, H, W, K)  — K basis components pre-pooling
+    p_original   : Tensor  (B, C, H, W)     — grounding activations pre-pooling
+    kernel_size, stride, padding : pooling geometry
+
+    Returns
+    -------
+    Tensor  (B, C, H_out, W_out, K)
+    """
+    B, C, H, W, K = p_components.shape
+    ks = kernel_size
+
+    if padding > 0:
+        p_original   = F.pad(p_original, [padding] * 4)
+        pc_bckw      = p_components.permute(0, 1, 4, 2, 3).reshape(B, C * K, H, W)
+        pc_bckw      = F.pad(pc_bckw, [padding] * 4)
+        H_pad, W_pad = pc_bckw.shape[-2], pc_bckw.shape[-1]
+        p_components = pc_bckw.view(B, C, K, H_pad, W_pad).permute(0, 1, 3, 4, 2)
+
+    H_in, W_in = p_original.shape[-2], p_original.shape[-1]
+    H_out = (H_in - ks) // stride + 1
+    W_out = (W_in - ks) // stride + 1
+    L     = H_out * W_out
+
+    # Unfold original activations → (B, C, L, ks²)
+    p_unf = F.unfold(p_original, kernel_size=ks, stride=stride)    # (B, C*ks², L)
+    p_win = p_unf.view(B, C, ks * ks, L).permute(0, 1, 3, 2)       # (B, C, L, ks²)
+
+    # Find argmax per window: (B, C, L, 1)
+    argmax_idx = torch.argmax(p_win, dim=-1, keepdim=True)          # (B, C, L, 1)
+
+    # Unfold components and extract max pixel components
+    pc_bck = p_components.permute(0, 1, 4, 2, 3).reshape(B, C * K, H_in, W_in)
+    pc_unf = F.unfold(pc_bck, kernel_size=ks, stride=stride)         # (B, C*K*ks², L)
+    pc_win = pc_unf.view(B, C, K, ks * ks, L).permute(0, 1, 4, 3, 2)# (B, C, L, ks², K)
+
+    # Gather max pixel components: expand argmax to K dim, gather
+    argmax_expanded = argmax_idx.expand(B, C, L, K).unsqueeze(-1)    # (B, C, L, K, 1)
+    z_out = torch.gather(pc_win, dim=-2, index=argmax_expanded).squeeze(-2)  # (B, C, L, K)
+    return z_out.view(B, C, H_out, W_out, K)
+
+
 # ── Self-test ─────────────────────────────────────────────────────────────────
 
 def _run_tests() -> None:
@@ -147,13 +207,21 @@ def _run_tests() -> None:
     ks, st = 3, 2
     p_orig  = torch.randn(B, C, H, W)
     p_comp  = p_orig.unsqueeze(-1).expand(-1, -1, -1, -1, K).contiguous() / K
+    
+    # Test softmax mode
     alpha   = estimate_alpha(p_orig, ks, st)
-    out     = maxpool_decompose(p_comp, p_orig, ks, st, alpha=alpha)
+    out_softmax = maxpool_decompose(p_comp, p_orig, ks, st, alpha=alpha)
     ref     = F.max_pool2d(p_orig, ks, st)
-    err     = (out.sum(-1) - ref).abs().max().item()
-    status  = "✓" if err < 0.1 else "⚠"
-    print(f"maxpool_decompose  mass-conservation error: {err:.2e}  {status}")
+    err_softmax = (out_softmax.sum(-1) - ref).abs().max().item()
+    status  = "✓" if err_softmax < 0.1 else "⚠"
+    print(f"maxpool_decompose (softmax)   mass-conservation error: {err_softmax:.2e}  {status}")
     print(f"  estimated α = {alpha:.2f}")
+    
+    # Test max_pixel mode
+    out_max_pixel = maxpool_decompose_max_pixel(p_comp, p_orig, ks, st)
+    err_max_pixel = (out_max_pixel.sum(-1) - ref).abs().max().item()
+    status = "✓" if err_max_pixel < 0.01 else "⚠"
+    print(f"maxpool_decompose (max_pixel) mass-conservation error: {err_max_pixel:.2e}  {status}")
 
 
 if __name__ == "__main__":

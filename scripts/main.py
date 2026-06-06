@@ -111,6 +111,12 @@ def parse_args(argv=None):
         metavar="A",
         help="Manual α for pool2. None = auto.",
     )
+    pool.add_argument(
+        "--pool-mode",
+        choices=["softmax", "max_pixel"],
+        default="softmax",
+        help='MaxPool decomposition mode: "softmax" (default, softmax approximation) or "max_pixel" (direct max pixel pass-through).',
+    )
 
     vis = p.add_argument_group("Visualisation")
     vis.add_argument(
@@ -188,6 +194,7 @@ def main(argv=None):
         visualise=not args.no_visualise,
         vis_image_path=args.image_path,
         max_channels=args.max_channels,
+        pool_mode=args.pool_mode,
         create_subdirs=bool(args.input_dir),
     )
 
