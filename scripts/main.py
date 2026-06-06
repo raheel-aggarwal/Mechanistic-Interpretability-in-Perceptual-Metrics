@@ -8,7 +8,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from pipeline import load_alexnet, list_image_paths, run_images
+from pipeline import load_alexnet, list_image_paths, run_images, load_basis_json
 
 
 def parse_args(argv=None):
@@ -45,9 +45,8 @@ def parse_args(argv=None):
     basis = p.add_argument_group("Basis")
     basis.add_argument(
         "--basis", "-b",
-        choices=["haar", "dct", "none"],
-        default="haar",
-        help='Kernel decomposition basis. "none" skips decomposition (K=1).',
+        default="none",
+        help='Kernel decomposition basis: "haar", "dct", "none", or a path to a basis JSON file. "none" skips decomposition (K=1).',
     )
 
     prune = p.add_argument_group("Pruning")
@@ -177,12 +176,25 @@ def main(argv=None):
     alpha_per_pool = _build_alpha_overrides(args)
     model = load_alexnet(pretrained=not args.no_pretrained)
     output_root = Path(args.output_dir)
+    
+    # Resolve basis specification: builtin name or JSON file
+    basis_spec = args.basis
+    if isinstance(basis_spec, str) and basis_spec != "none":
+        p = Path(basis_spec)
+        if p.exists():
+            try:
+                basis_spec = load_basis_json(p)
+                print(f"Loaded basis JSON: {p}")
+            except Exception as e:
+                print(f"Warning: failed to load basis JSON {p}: {e}")
+                # fall back to string option
+                basis_spec = args.basis
 
     run_images(
         image_paths=images,
         output_root=output_root,
         model=model,
-        basis_type=args.basis,
+        basis_type=basis_spec,
         prune=args.prune,
         top_k=args.top_k,
         path_epsilon=args.path_epsilon,

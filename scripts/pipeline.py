@@ -57,6 +57,67 @@ ALEXNET_POOL_LAYERS = [
 ]
 
 
+def load_basis_json(path: Path) -> Dict:
+    """Load a basis JSON specification from `path`.
+
+    The JSON may either contain explicit numeric vectors under keys `1d`/`2d` or
+    a `{ "generate": "haar" }` / `{ "generate": "dct" }` instruction for
+    each kernel size. This function returns the parsed dict unchanged; the
+    decomposed forward pass will resolve numeric arrays as needed.
+    """
+    path = Path(path)
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _resolve_1d_basis(basis_spec, N: int):
+    """Return an (N,N) ndarray of 1-D basis vectors for size N.
+
+    `basis_spec` may be:
+    - the string 'haar' or 'dct' → compute with the builtin generator
+    - the dict loaded from a basis JSON → it may contain `1d` entries keyed by
+      the kernel size (as strings). Each entry may either be a list-of-lists
+      (explicit vectors) or an object {"generate": "haar"|"dct"}.
+    """
+    if basis_spec is None or basis_spec == "none":
+        return None
+    if isinstance(basis_spec, str):
+        if basis_spec == "haar":
+            return haar_basis(N)
+        if basis_spec == "dct":
+            return dct_basis(N)
+        # unexpected string, treat as none
+        return None
+
+    # assume dict-like JSON spec
+    # Expect a `dim` attribute: 1 (1D vectors) or 2 (explicit 2D kernels).
+    if isinstance(basis_spec, dict):
+        if basis_spec.get("dim") == 2:
+            raise ValueError(
+                "Provided basis JSON contains 2-D kernels; a 1-D basis is required here"
+            )
+
+        one_d = basis_spec.get("1d", {})
+        key = str(N)
+        entry = one_d.get(key) or one_d.get(N)
+        if entry is None:
+            # fallback to declared basis flavour if present
+            flavour = basis_spec.get("basis")
+            if flavour == "dct":
+                return dct_basis(N)
+            return haar_basis(N)
+
+        # only numeric list-of-lists is accepted; 'generate' instruction removed
+        if not isinstance(entry, list):
+            raise ValueError(
+                "basis JSON entries must be numeric arrays under '1d' for each kernel size"
+            )
+        return np.array(entry)
+
+    # unexpected type — treat as none
+    return None
+
+
 def load_alexnet(pretrained: bool = True) -> nn.Module:
     """Load AlexNet and move it to the active device."""
     weights = tv_models.AlexNet_Weights.DEFAULT if pretrained else None
@@ -765,7 +826,10 @@ def decomposed_forward(
                 if basis_type == "none":
                     z_pq = grounding["conv_outputs"][conv_idx].to(DEVICE).unsqueeze(-1)
                 else:
-                    U = haar_basis(layer.kernel_size[0]) if basis_type == "haar" else dct_basis(layer.kernel_size[0])
+                    Nks = layer.kernel_size[0]
+                    U = _resolve_1d_basis(basis_type, Nks)
+                    if U is None:
+                        raise ValueError(f"Could not resolve basis for kernel size {Nks}")
                     if x_comp is None:
                         z_pq = basis_component_maps(
                             x, layer.weight, U,

@@ -72,7 +72,7 @@ When `--input-dir` is given, each image gets its own subdirectory inside `--outp
 | Flag | Default | Description |
 |---|---|---|
 | `--output-dir` / `-o` | `./decomp_outputs` | Root directory for all saved outputs. |
-| `--basis` / `-b` | `haar` | Kernel decomposition basis: `haar`, `dct`, or `none`. `none` skips decomposition (K=1 component per channel). |
+| `--basis` / `-b` | `none` | Kernel decomposition basis: `haar`, `dct`, `none`, or a path to a basis JSON file. `none` skips decomposition (K=1 component per channel). |
 | `--prune N` | off | After each conv layer, keep only the top-N components per output channel (ranked by mean absolute activation); zero the rest. Reduces memory at the cost of some reconstruction fidelity. |
 | `--top-k K` | `20` | Number of top-scoring components recorded per channel in attributions and visualisations. |
 | `--path-epsilon EPS` | `1e-6` | Attribution components with mean absolute activation below this threshold are zeroed before recording. |
@@ -97,6 +97,38 @@ For the full flag list:
 ```bash
 python scripts/main.py --help
 ```
+
+### Basis JSON format
+
+You may pass a JSON file to `--basis` to explicitly control the basis vectors used for each kernel size. Each JSON must contain either a `1d` section (recommended) or a `2d` section — not both — and a `dim` attribute indicating whether the file contains 1-D rows (`"dim": 1`) or full 2-D kernels (`"dim": 2`).
+
+Example (1-D vectors — pipeline will form 2-D kernels via outer-product):
+
+```json
+{
+   "basis": "dct",
+   "dim": 1,
+   "1d": {
+      "11": [ [0.1, 0.2, ...], [ ... ], ... ],
+      "5":  [ [ ... ], ... ],
+      "3":  [ [ ... ], ... ]
+   }
+}
+```
+
+Example (2-D kernels provided directly):
+
+```json
+{
+   "basis": "custom",
+   "dim": 2,
+   "2d": {
+      "3": [ [ [k00,k01,k02], [k10,k11,k12], [k20,k21,k22] ], ... ]
+   }
+}
+```
+
+When `dim` is `1`, the pipeline reads the `1d` entry for the kernel size in use (e.g. `11` for an 11×11 kernel) and uses those rows as orthonormal 1-D basis vectors. Entries must be explicit numeric arrays; the previously-supported `{ "generate": ... }` instruction is no longer accepted.
 
 ---
 
