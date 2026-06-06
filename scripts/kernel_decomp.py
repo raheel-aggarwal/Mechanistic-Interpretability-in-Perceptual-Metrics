@@ -11,9 +11,59 @@ basis_component_maps(X, K, U, ...) -> Tensor  (B, Co, Ho, Wo, N²)
 prune_components(x_comp, prune)    -> Tensor  (B, C, H, W, K)
 """
 
+import math
+from typing import List
+
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+
+def dct_basis(N: int) -> np.ndarray:
+    """Orthonormal DCT-II basis for R^N."""
+    ns = np.arange(N)
+    U = np.zeros((N, N))
+    for k in range(N):
+        alpha = math.sqrt(1.0 / N) if k == 0 else math.sqrt(2.0 / N)
+        U[k] = alpha * np.cos(math.pi * (2 * ns + 1) * k / (2 * N))
+    return U
+
+
+def haar_basis(N: int) -> np.ndarray:
+    """Generalised Haar basis for R^N."""
+    vectors: List[np.ndarray] = []
+    vectors.append(np.ones(N) / math.sqrt(N))
+
+    def _recurse(lo: int, hi: int) -> None:
+        length = hi - lo + 1
+        if length < 2:
+            return
+        left_size = length // 2
+        right_size = length - left_size
+
+        v = np.zeros(N)
+        v[lo : lo + left_size] = 1.0
+        v[lo + left_size : hi+1] = -left_size / right_size
+        vectors.append(v / np.linalg.norm(v))
+
+        _recurse(lo, lo + left_size - 1)
+        _recurse(lo + left_size, hi)
+
+    _recurse(0, N - 1)
+    return np.array(vectors)
+
+
+def get_1d_basis(N: int, basis_type: str = "haar") -> np.ndarray:
+    if basis_type == "haar":
+        return haar_basis(N)
+    if basis_type == "dct":
+        return dct_basis(N)
+    raise ValueError(f"Unknown basis_type {basis_type!r}. Use 'haar' or 'dct'.")
+
+
+def build_2d_basis(N: int, basis_type: str = "haar") -> np.ndarray:
+    U = get_1d_basis(N, basis_type)
+    return np.einsum("pi,qj->pqij", U, U)
 
 
 def project_kernel(
@@ -80,7 +130,7 @@ def basis_component_maps(
     ----------
     X       : Tensor  (B, C_in, H, W)
     K       : Tensor  (C_out, C_in, N, N)
-    U       : ndarray (N, N)  — 1-D basis from basis.py
+    U       : ndarray (N, N)  — 1-D basis from `haar_basis` or `dct_basis`
     padding : same as the original conv layer
     stride  : same as the original conv layer
 
@@ -153,10 +203,6 @@ def prune_components(
 # ── Self-test ─────────────────────────────────────────────────────────────────
 
 def _run_tests() -> None:
-    import sys, os
-    sys.path.insert(0, os.path.dirname(__file__))
-    from basis import haar_basis, dct_basis
-
     # Round-trip test
     for btype in ("haar", "dct"):
         for N in (3, 5, 11):
