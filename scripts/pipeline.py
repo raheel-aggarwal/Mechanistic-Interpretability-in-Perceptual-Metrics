@@ -823,8 +823,14 @@ def decomposed_forward(
                 pad = layer.padding[0]
                 lname = conv_names[conv_idx] if conv_idx < len(conv_names) else f"conv{conv_idx}"
 
+                bias_term = None
                 if basis_type == "none":
-                    z_pq = grounding["conv_outputs"][conv_idx].to(DEVICE).unsqueeze(-1)
+                    z_kernel = grounding["conv_outputs"][conv_idx].to(DEVICE)
+                    if layer.bias is not None:
+                        b = layer.bias.to(DEVICE).view(1, -1, 1, 1)
+                        bias_term = b.expand(x.shape[0], -1, z_kernel.shape[2], z_kernel.shape[3]).unsqueeze(-1)
+                        z_kernel = z_kernel - b
+                    z_pq = z_kernel.unsqueeze(-1)
                 else:
                     Nks = layer.kernel_size[0]
                     U = _resolve_1d_basis(basis_type, Nks)
@@ -844,10 +850,14 @@ def decomposed_forward(
                                 x_comp[..., k], layer.weight, U,
                                 padding=pad, stride=layer.stride[0])
                         z_pq = z_acc
+                    if layer.bias is not None:
+                        b = layer.bias.to(DEVICE).view(1, -1, 1, 1)
+                        bias_term = b.expand(z_pq.shape[0], -1, z_pq.shape[2], z_pq.shape[3]).unsqueeze(-1)
 
-                x_comp = z_pq
                 if prune is not None:
-                    x_comp = prune_components(x_comp, prune)
+                    z_pq = prune_components(z_pq, prune)
+
+                x_comp = torch.cat([z_pq, bias_term], dim=-1) if bias_term is not None else z_pq
 
                 results["layer_components"][lname] = x_comp.clone().cpu()
                 conv_idx += 1
